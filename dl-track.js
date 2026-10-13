@@ -1,5 +1,5 @@
 /*!
- * darlena-track v0.2.3
+ * darlena-track v0.2.4
  * First-party ad-click and visitor log for darlena.com, served from jsDelivr
  * (loaded through Salla custom code or GTM; no theme change).
  *
@@ -23,7 +23,13 @@
  *
  * Multi-touch: every ad click or outside referral starts a new visit and is its own landing page view
  * on the server. The browser also keeps the last 20 clicks within 90 days and sends the whole list
- * ("tp") with each landing, identify, checkout_start and purchase.
+ * ("tp") with each landing, identify, checkout_start and purchase. A visit whose own address has no ad
+ * tags but whose darlena.com referrer does (another tab or browser logged the click, or Salla's checkout
+ * link kept the UTMs) records those tags as its click, marked o: "ref" / "checkout".
+ *
+ * Also on every page view, checkout_start and purchase: the click IDs the theme saves with their times
+ * ("pc") and Salla's cart ID as the theme last saw it ("cart_id"; Salla puts it on the order as
+ * checkout_id). A purchase sent before Salla shows the amount is sent again with the amount (same event).
  *
  * It never sends raw phone, email or names, blanks the values of personal or secret address keys
  * (token, phone, email, ...), never reads Salla's page.link/page.referrer (Salla's guest page cache
@@ -37,7 +43,7 @@
     if (!w || !d || !w.location || (w.__dlTrack && w.__dlTrack.version)) return;
   } catch (e) { return; }
 
-  var VERSION = '0.2.3';
+  var VERSION = '0.2.4';
   var cfg = w.DL_TRACK_CONFIG || {};
   var ENDPOINT = cfg.endpoint || 'https://darlena.shop/collectTouch';
   var ENDPOINT_V4 = cfg.endpointV4 === null ? null : (cfg.endpointV4 || 'https://darlena.co/collectTouch');
@@ -248,6 +254,24 @@
     lsSet('dl_tp', JSON.stringify(list.slice(-TOUCH_MAX)));
     return true;
   }
+  // The same click, whatever link it was read from: the same click ID, or (no click IDs) the same platform,
+  // ad and campaign. Salla's checkout link keeps the UTMs and click ID but drops Ad-ID.
+  function sameClick(a, b) {
+    var ids = ['sc', 'tt', 'fb', 'g'], any = false;
+    for (var i = 0; i < ids.length; i++) {
+      if (a[ids[i]] || b[ids[i]]) any = true;
+      if (a[ids[i]] && a[ids[i]] === b[ids[i]]) return true;
+    }
+    return !any && a.s === b.s && (a.ux || '') === (b.ux || '') && (a.uc || '') === (b.uc || '');
+  }
+  // A click read from a link we came from: added only when this browser has not recorded that click yet.
+  function addTouchOnce(t) {
+    var list = readTouches(t.ts);
+    for (var i = 0; i < list.length; i++) if (sameClick(list[i], t)) return false;
+    list.push(t);
+    lsSet('dl_tp', JSON.stringify(list.slice(-TOUCH_MAX)));
+    return true;
+  }
 
   // ---------------------------------------------------------------- device
   function parseUa(ua) {
@@ -267,7 +291,8 @@
     else if (/Linux/.test(ua)) { o.os = 'Linux'; }
     // In-app browsers first (they also carry Safari/Chrome tokens).
     var apps = [['Snapchat', /Snapchat\/([\d.]+)/], ['TikTok', /(?:musical_ly|TikTok|BytedanceWebview)[\/_ ]?([\d.]+)?/i],
-      ['Instagram', /Instagram ([\d.]+)/], ['Facebook', /FB(?:AN|AV)\/([\d.]+)?/], ['WhatsApp', /WhatsApp\/([\d.]+)/],
+      // WhatsApp's own browser: "[WAiOS/2.26.39]" on iPhone, "WA4A/2.26.38.73" on Android.
+      ['Instagram', /Instagram ([\d.]+)/], ['Facebook', /FB(?:AN|AV)\/([\d.]+)?/], ['WhatsApp', /(?:WhatsApp\/|WAiOS\/|WA4A\/)([\d.]+)/],
       ['Twitter', /Twitter(?:Android)?\/?([\d.]+)?/], ['Pinterest', /Pinterest\/?([\d.]+)?/], ['Darlena', /DARLENA\/([\d.]+)/]];
     for (var i = 0; i < apps.length; i++) {
       if ((m = apps[i][1].exec(ua))) { o.app = apps[i][0]; o.appv = m[1] || null; break; }
@@ -313,6 +338,36 @@
       o.plat = nav.platform || null;
     });
     return o;
+  }
+  // Click IDs the theme saves itself (darlenatheme attribution-links.js) with the time of the click. They
+  // outlast a visit and date clicks the platforms' cookies cannot (Snap's _scclid has no date; TikTok keeps
+  // no readable click cookie).
+  var PRIOR_KEYS = [['sc', 'snap_ScCid'], ['tt', 'tiktok_ttclid'], ['fb', 'darlena_fbclid']];
+  function priorClicks() {
+    var o = {}, any = false;
+    for (var i = 0; i < PRIOR_KEYS.length; i++) {
+      var v = lsGet(PRIOR_KEYS[i][1]);
+      if (!v) continue;
+      o[PRIOR_KEYS[i][0]] = trunc(v, 500);
+      var at = parseInt(lsGet(PRIOR_KEYS[i][1] + '_ts') || '', 10);
+      if (at) o[PRIOR_KEYS[i][0] + '_at'] = at;
+      any = true;
+    }
+    return any ? o : null;
+  }
+  // Salla's cart ID as the theme last saw it (this tab's cart journey, else the longer-lived cart record).
+  // Salla puts the same ID on the order as checkout_id, so an order can be matched without a thank-you page.
+  function cartId() {
+    var id = null;
+    safe(function () {
+      var j = JSON.parse(w.sessionStorage.getItem('darlena:cart-journey:v1') || 'null');
+      if (j && j.cart) id = String(j.cart);
+    });
+    if (!id) safe(function () {
+      var r = JSON.parse(lsGet('darlena:reco:v1:cart') || 'null');
+      if (r && r.cart && (!r.at || now() - r.at < 30 * 86400000)) id = String(r.cart);
+    });
+    return id && /^[\w-]{1,40}$/.test(id) ? id : null;
   }
   function platformIds() {
     var o = {}, any = false;
@@ -476,6 +531,11 @@
   var refH = refHost(ref);
   var outsideRef = !!refH && !isOwnHost(refH);
   var adSig = params.ad ? adSignature(params.q) : '';
+  // Ad tags on our own page we came from. Seen when that page was logged under another visitor ID (a private
+  // tab, an app's browser handing over to Safari, a payment return) or on Salla's checkout / payment link,
+  // which keeps the last UTMs Salla saw.
+  var refParams = null;
+  if (!params.ad && refH && isOwnHost(refH)) safe(function () { var r = readParams(searchOf(ref)); if (r.ad) refParams = r; });
 
   var sid = lsGet('dl_sid');
   var lastSeen = parseInt(lsGet('dl_sat') || '', 10);
@@ -610,7 +670,7 @@
       if (!id) return;
       lsSet('dl_idsid', id.key + '|' + sid);
       var li = landingInfo();
-      enqueue(make('identify', withIdentity({via: trigger, lurl: li.lurl, ids: platformIds(), ua: ua,
+      enqueue(make('identify', withIdentity({via: trigger, lurl: li.lurl, ids: platformIds(), pc: priorClicks(), ua: ua,
         tp: readTouches(now())}, id)), true);
     })['catch'](function () {}).then(function () { identifying = false; });
   }
@@ -632,38 +692,62 @@
       var ec = e.ecommerce;
       var tid = ec.transaction_id || (ec.purchase && ec.purchase.actionField && ec.purchase.actionField.id);
       if (!oref && tid) oref = String(tid);
-      value = ec.value != null ? ec.value : (ec.purchase && ec.purchase.actionField && ec.purchase.actionField.revenue);
-      currency = ec.currency || null;
+      var af = ec.purchase && ec.purchase.actionField;
+      value = ec.value != null ? ec.value : (af && af.revenue);
+      // Salla's purchase entry names it currencyCode (and actionField.currency_code).
+      currency = ec.currency || ec.currencyCode || (af && af.currency_code) || null;
     }
     oref = oref ? trunc(String(oref).replace(/[^\d]/g, ''), 20) : null;
     oid = oid ? trunc(String(oid).replace(/[^\d]/g, ''), 20) : null;
     return oref || oid ? {ref: oref, oid: oid, value: value != null ? Number(value) || null : null, cur: currency} : null;
   }
+  var AMOUNT_WAIT_TRIES = 40;
   function watchThankYou() {
     if (!/\/thank-?you/i.test(path)) return;
-    var tries = 0;
+    var tries = 0, sentAt = 0, filled = false;
     var timer = setInterval(function () {
       tries++;
       var o = readOrderFromPage();
-      if (o || tries >= 30) clearInterval(timer);
-      if (!o) return;
-      var key = o.ref || o.oid;
-      var seen = [];
-      try { seen = JSON.parse(lsGet('dl_po') || '[]') || []; } catch (e) { seen = []; }
-      if (seen.indexOf(key) !== -1) return;
-      seen.push(key);
-      lsSet('dl_po', JSON.stringify(seen.slice(-30)));
-      sendPurchase('thankyou', o);
+      if (!sentAt) {
+        if (!o) { if (tries >= 30) clearInterval(timer); return; }
+        var key = o.ref || o.oid;
+        var seen = [];
+        try { seen = JSON.parse(lsGet('dl_po') || '[]') || []; } catch (e) { seen = []; }
+        if (seen.indexOf(key) !== -1) { clearInterval(timer); return; }
+        seen.push(key);
+        lsSet('dl_po', JSON.stringify(seen.slice(-30)));
+        // Sent at once: a shopper who leaves quickly still counts. The amount follows if it is not there yet.
+        sendPurchase('thankyou', o);
+        sentAt = tries;
+        if (o.value != null) clearInterval(timer);
+        return;
+      }
+      // Salla's order details can appear after the order number. Same event again (same id): the server
+      // merges it into the saved purchase, and a blank never overwrites a saved value.
+      if (o && o.value != null && purchaseEvt && !filled) {
+        filled = true;
+        clearInterval(timer);
+        var again = {};
+        for (var k in purchaseEvt) if (Object.prototype.hasOwnProperty.call(purchaseEvt, k)) again[k] = purchaseEvt[k];
+        var prev = purchaseEvt.order || {};
+        again.order = {ref: prev.ref || o.ref, oid: prev.oid || o.oid, value: o.value, cur: o.cur || prev.cur || null};
+        enqueue(again, true);
+        return;
+      }
+      if (tries - sentAt >= AMOUNT_WAIT_TRIES) clearInterval(timer);
     }, 500);
   }
   // Full browser snapshot with the order and the customer, so it never depends on event order.
+  var purchaseEvt = null;
   function sendPurchase(via, order) {
     waitHints(function () {
       identity().then(function (id) {
         var li = landingInfo();
-        enqueue(make('purchase', withIdentity({via: via, order: order, url: url, ref: ref ? sanitizeUrl(ref) : null,
+        var e = make('purchase', withIdentity({via: via, order: order, url: url, ref: ref ? sanitizeUrl(ref) : null,
           lurl: li.lurl, lat: li.lat, furl: li.furl, ua: ua, uai: uaInfo, uah: hints, dev: device(), ids: platformIds(),
-          tp: readTouches(now())}, id)), true);
+          pc: priorClicks(), cart_id: cartId(), tp: readTouches(now())}, id));
+        if (via === 'thankyou') purchaseEvt = e;
+        enqueue(e, true);
       })['catch'](function () {});
     });
   }
@@ -689,7 +773,8 @@
             var c = data && data.cart;
             enqueue(make('add_to_cart', {pid: productId != null ? String(productId) : null,
               total: c && c.total != null ? Number(c.total) || null : null,
-              items: c && c.count != null ? c.count : null}), false);
+              items: c && c.count != null ? c.count : null,
+              cart_id: c && c.id != null && /^[\w-]{1,40}$/.test(String(c.id)) ? String(c.id) : cartId()}), false);
           });
         });
       }
@@ -719,7 +804,8 @@
             if (lsGet('dl_cks') === sid) return;
             lsSet('dl_cks', sid);
             checkIdentity('checkout');
-            enqueue(make('checkout_start', {lurl: landingInfo().lurl, ids: platformIds(), tp: readTouches(now())}), true);
+            enqueue(make('checkout_start', {lurl: landingInfo().lurl, ids: platformIds(), pc: priorClicks(), cart_id: cartId(),
+              tp: readTouches(now())}), true);
             return;
           }
         }
@@ -735,6 +821,14 @@
     safe(function () {
       touch = makeTouch(params.q, outsideRef ? refH : '', t0, params.ad ? 'ad' : 'ref', url);
       touchNew = addTouch(touch);
+    });
+  } else if (refParams && newSession) {
+    safe(function () {
+      touch = makeTouch(refParams.q, '', t0, 'ad', sanitizeUrl(ref));
+      // o: where the tags were read: "ref" = our page we came from, "checkout" = Salla's checkout / payment link.
+      touch.o = /\/(checkout|payment)\//i.test(pathOf(ref)) ? 'checkout' : 'ref';
+      touchNew = addTouchOnce(touch);
+      if (!touchNew) touch = null;
     });
   }
   waitHints(function () {
@@ -753,7 +847,7 @@
         q: params.n ? params.q : null,
         pid: productIdFromPath(path),
         touch: touch, tnew: touchNew ? 1 : 0, tpn: readTouches(now()).length,
-        ua: ua, uai: uaInfo, uah: hints, dev: device(), ids: ids,
+        ua: ua, uai: uaInfo, uah: hints, dev: device(), ids: ids, pc: priorClicks(), cart_id: cartId(),
         fv: vidNew ? 1 : 0,
         ms: safe(function () { return Math.round(w.performance.now()); }) || null
       };

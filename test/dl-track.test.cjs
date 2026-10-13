@@ -42,11 +42,11 @@ function makeEnv(opts = {}) {
   const salla = opts.userRef ? {config: {get: k => (k === 'user' ? opts.userRef.u : null)}, event: {}} : undefined;
   const window = {
     location: {href: url.href, protocol: url.protocol, host: url.host, hostname: url.hostname, pathname: url.pathname, search: url.search},
-    localStorage: storage, navigator: {userAgent: opts.ua || IPHONE_SNAP, language: 'ar-SA', languages: ['ar-SA', 'en'], maxTouchPoints: 5, platform: 'iPhone'},
+    localStorage: storage, sessionStorage: opts.session || memoryStorage(), navigator: {userAgent: opts.ua || IPHONE_SNAP, language: 'ar-SA', languages: ['ar-SA', 'en'], maxTouchPoints: 5, platform: 'iPhone'},
     screen: {width: 393, height: 852}, devicePixelRatio: 3, innerWidth: 393, innerHeight: 700,
     crypto: crypto.webcrypto, TextEncoder, performance,
     dataLayer: opts.dataLayer || [], DL_TRACK_CONFIG: Object.assign({dryRun: true}, opts.config || {}),
-    salla: user ? {config: {get: k => (k === 'user' ? user : null)}, event: {}, onReady: fn => fn()} : salla,
+    salla: opts.salla || (user ? {config: {get: k => (k === 'user' ? user : null)}, event: {}, onReady: fn => fn()} : salla),
     addEventListener() {}, console,
   };
   const ctx = vm.createContext(Object.assign({window, document, Promise, JSON, Date, Math, Intl, URL, Uint8Array,
@@ -291,3 +291,106 @@ test('iPhone on iOS 26+: real version read from Version/, frozen 18.7 kept apart
   assert.strictEqual(JSON.stringify([tiktok.osv, tiktok.osf, tiktok.app]), JSON.stringify(['26.6', undefined, 'TikTok']));
 });
 
+test('WhatsApp\'s own browser is recognised on iPhone and Android', () => {
+  const p = makeEnv().api.h.parseUa;
+  const ios = p('Mozilla/5.0 (iPhone; CPU iPhone OS 26_6_2 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.6.2 Mobile/15E148 Safari/604.1 [WAiOS/2.26.39]');
+  assert.strictEqual(JSON.stringify([ios.app, ios.appv, ios.osv]), JSON.stringify(['WhatsApp', '2.26.39', '26.6.2']));
+  const and = p('Mozilla/5.0 (Linux; Android 13; SM-S908E Build/TP1A.220624.014) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/153.0.8010.57 Mobile Safari/537.36 WA4A/2.26.38.73');
+  assert.strictEqual(JSON.stringify([and.app, and.appv, and.dev]), JSON.stringify(['WhatsApp', '2.26.38.73', 'SM-S908E']));
+  assert.strictEqual(p('Mozilla/5.0 (iPhone; CPU iPhone OS 26_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.6 Mobile/15E148 Safari/604.1').app, null);
+});
+
+test('ad tags on our own page we came from become the click when this browser never saw it; not twice', async () => {
+  const adPage = 'https://darlena.com/c22?ttclid=TT9&utm_source=tiktok&utm_campaign=Spring&utm_content=ad77';
+  const fresh = makeEnv({url: 'https://darlena.com/abaya/p1126339486', referrer: adPage});
+  await wait(400);
+  const pv = evsOf(fresh.api)[0];
+  assert.strictEqual(JSON.stringify([pv.touch.s, pv.touch.k, pv.touch.o, pv.touch.tt, pv.touch.uc]), JSON.stringify(['tiktok', 'ad', 'ref', 'TT9', 'Spring']));
+  assert.strictEqual(pv.touch.u, adPage);
+  assert.strictEqual(pv.tp.length, 1);
+  // The same browser landed on the ad page itself: the next page (new visit after a long gap) adds nothing.
+  const storage = memoryStorage();
+  makeEnv({url: adPage, storage});
+  await wait(400);
+  storage.setItem('dl_sat', String(Date.now() - 31 * 60000));
+  const later = makeEnv({url: 'https://darlena.com/abaya/p1126339486', referrer: adPage, storage});
+  await wait(400);
+  const pv2 = evsOf(later.api)[0];
+  assert.strictEqual(pv2.land, 1);
+  assert.strictEqual(pv2.touch, null);
+  assert.strictEqual(pv2.tpn, 1, 'click kept once');
+});
+
+test('thank-you reached first in this browser: Salla checkout link UTMs recorded as the click (o: checkout)', async () => {
+  const el = {getAttribute: a => (a === 'data-content' ? '293609214' : null), textContent: ''};
+  const checkout = 'https://darlena.com/checkout/XmwYE9V?utm_term=BGID_10&currency=SAR&utm_campaign=Snapchat-Sales&utm_content=aad71557&has_apple_pay=true&utm_source=snapchat&ScCid=9144207a&utm_medium=paid';
+  const env = makeEnv({url: 'https://darlena.com/thankyou/WAbNYYP', referrer: checkout, elements: {'[data-testid="store-thankyou-order-id"]': el}});
+  await wait(1200);
+  const p = evsOf(env.api).find(e => e.t === 'purchase');
+  const t = p.tp[p.tp.length - 1];
+  assert.strictEqual(JSON.stringify([t.s, t.o, t.sc, t.ux, t.uc]), JSON.stringify(['snapchat', 'checkout', '9144207a', 'aad71557', 'Snapchat-Sales']));
+  assert.strictEqual(p.ref, checkout);
+});
+
+test('click IDs the theme saved, with their times, and Salla\'s cart ID ride along', async () => {
+  const storage = memoryStorage({snap_ScCid: 'c-old', snap_ScCid_ts: '1791682445110', tiktok_ttclid: 'E_C_P_x', tiktok_ttclid_ts: '1790259679103',
+    'darlena:reco:v1:cart': JSON.stringify({v: 2, cart: '3203808174170559083', lines: {}, at: Date.now() - 3600000})});
+  const session = memoryStorage({'darlena:cart-journey:v1': JSON.stringify({at: Date.now(), cart: '3209999999999999999'})});
+  const env = makeEnv({url: 'https://darlena.com/cart', storage, session});
+  await wait(400);
+  const pv = evsOf(env.api)[0];
+  assert.strictEqual(JSON.stringify(pv.pc), JSON.stringify({sc: 'c-old', sc_at: 1791682445110, tt: 'E_C_P_x', tt_at: 1790259679103}));
+  assert.strictEqual(pv.cart_id, '3209999999999999999', 'this tab\'s cart first');
+  const other = makeEnv({url: 'https://darlena.com/', storage});
+  await wait(400);
+  assert.strictEqual(evsOf(other.api)[0].cart_id, '3203808174170559083', 'else the saved cart record');
+});
+
+test('add to cart carries Salla\'s cart ID from Salla\'s reply', async () => {
+  let added = null;
+  const salla = {config: {get: () => null}, event: {cart: {onItemAdded: fn => { added = fn; }}}, onReady: fn => fn()};
+  const env = makeEnv({url: 'https://darlena.com/abaya/p1', salla});
+  await wait(400);
+  added({data: {cart: {id: 3201657834988832063n.toString(), total: 299, count: 1}}}, 1126339486);
+  await wait(2400);
+  const a = evsOf(env.api).find(e => e.t === 'add_to_cart');
+  assert.strictEqual(JSON.stringify([a.pid, a.cart_id, a.total]), JSON.stringify(['1126339486', '3201657834988832063', 299]));
+});
+
+test('purchase sent at once; the amount and currency follow on the same event when Salla adds them', async () => {
+  const el = {getAttribute: a => (a === 'data-content' ? '293619369' : null), textContent: ''};
+  const dataLayer = [];
+  const env = makeEnv({url: 'https://darlena.com/thankyou/BKygyjR', dataLayer, elements: {'[data-testid="store-thankyou-order-id"]': el}});
+  await wait(1200);
+  dataLayer.push({event: 'purchase', ecommerce: {currencyCode: 'SAR', purchase: {actionField: {id: 293619369, revenue: 281.37, currency_code: 'SAR'}}}});
+  await wait(1200);
+  const ps = env.api.sent.flatMap(s => s.body.ev).filter(e => e.t === 'purchase');
+  assert.strictEqual(ps.length, 2);
+  assert.strictEqual(ps[0].id, ps[1].id, 'same event, merged by the server');
+  assert.strictEqual(ps[0].order.value, null);
+  assert.strictEqual(JSON.stringify([ps[1].order.ref, ps[1].order.value, ps[1].order.cur]), JSON.stringify(['293619369', 281.37, 'SAR']));
+});
+
+test('amount already there: one purchase only, currency read from currencyCode', async () => {
+  const el = {getAttribute: a => (a === 'data-content' ? '293600001' : null), textContent: ''};
+  const dataLayer = [{event: 'purchase', ecommerce: {currencyCode: 'SAR', purchase: {actionField: {id: 293600001, revenue: 99.5}}}}];
+  const env = makeEnv({url: 'https://darlena.com/thankyou/x1', dataLayer, elements: {'[data-testid="store-thankyou-order-id"]': el}});
+  await wait(2500);
+  const ps = env.api.sent.flatMap(s => s.body.ev).filter(e => e.t === 'purchase');
+  assert.strictEqual(ps.length, 1);
+  assert.strictEqual(JSON.stringify([ps[0].order.value, ps[0].order.cur]), JSON.stringify([99.5, 'SAR']));
+});
+
+test('checkout link without Ad-ID is the same click as the ad landing (same ScCid): not added twice', async () => {
+  const storage = memoryStorage();
+  makeEnv({url: 'https://darlena.com/p9?Ad-ID=Snapchat_aad7&utm_source=snapchat&utm_content=aad7&ScCid=9144207a', storage});
+  await wait(400);
+  storage.setItem('dl_sat', String(Date.now() - 40 * 60000));
+  const el = {getAttribute: a => (a === 'data-content' ? '293609999' : null), textContent: ''};
+  const env = makeEnv({url: 'https://darlena.com/thankyou/z', storage, elements: {'[data-testid="store-thankyou-order-id"]': el},
+    referrer: 'https://darlena.com/checkout/abc?utm_source=snapchat&utm_content=aad7&ScCid=9144207a&currency=SAR'});
+  await wait(1200);
+  const p = evsOf(env.api).find(e => e.t === 'purchase');
+  assert.strictEqual(p.tp.length, 1);
+  assert.strictEqual(p.tp[0].a, 'Snapchat_aad7');
+});
