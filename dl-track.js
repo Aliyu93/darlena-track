@@ -1,5 +1,5 @@
 /*!
- * darlena-track v0.2.4
+ * darlena-track v0.2.5
  * First-party ad-click and visitor log for darlena.com, served from jsDelivr
  * (loaded through Salla custom code or GTM; no theme change).
  *
@@ -43,7 +43,7 @@
     if (!w || !d || !w.location || (w.__dlTrack && w.__dlTrack.version)) return;
   } catch (e) { return; }
 
-  var VERSION = '0.2.4';
+  var VERSION = '0.2.5';
   var cfg = w.DL_TRACK_CONFIG || {};
   var ENDPOINT = cfg.endpoint || 'https://darlena.shop/collectTouch';
   var ENDPOINT_V4 = cfg.endpointV4 === null ? null : (cfg.endpointV4 || 'https://darlena.co/collectTouch');
@@ -174,6 +174,9 @@
   }
 
   // ---------------------------------------------------------------- address keys
+  // The literal word "fbclid" used as the click ID is a placeholder, not a Meta click: Google Ads' summer-2026
+  // landing link carried "fbclid=fbclid" (Oct 2026). Only that exact value is set aside; every other fbclid counts.
+  function placeholderFbclid(v) { return /^fbclid$/i.test(String(v == null ? '' : v).trim()); }
   function readParams(search) {
     var out = {}, n = 0, ad = false;
     var q = String(search || '').replace(/^\?/, '');
@@ -188,7 +191,7 @@
       try { v = decodeURIComponent(v.replace(/\+/g, ' ')); } catch (e) {}
       k = trunc(k, 64);
       if (!k || DENY_KEY.test(k)) continue;
-      if (AD_KEY.test(k)) ad = true;
+      if (AD_KEY.test(k) && !(/^fbclid$/i.test(k) && placeholderFbclid(v))) ad = true;
       if (!Object.prototype.hasOwnProperty.call(out, k)) n++;
       out[k] = trunc(v, MAX_VALUE);
     }
@@ -216,7 +219,8 @@
     var src = String(pickParam(q, ['utm_source']) || '').toLowerCase();
     if (pickParam(q, ['sccid', '_sccid']) || /^snapchat_/i.test(adId) || /snap/.test(src)) return 'snapchat';
     if (pickParam(q, ['ttclid']) || /^tiktok_/i.test(adId) || /tiktok/.test(src)) return 'tiktok';
-    if (pickParam(q, ['fbclid']) || /^(meta|facebook|instagram)_/i.test(adId) || /facebook|instagram|meta|\bfb\b|\big\b/.test(src)) return 'meta';
+    var fbclid = pickParam(q, ['fbclid']);
+    if ((fbclid && !placeholderFbclid(fbclid)) || /^(meta|facebook|instagram)_/i.test(adId) || /facebook|instagram|meta|\bfb\b|\big\b/.test(src)) return 'meta';
     if (pickParam(q, ['gclid', 'gbraid', 'wbraid', 'dclid'])) return 'google';
     if (pickParam(q, ['epik']) || /pinterest/.test(src)) return 'pinterest';
     if (src) return src.slice(0, 30);
@@ -233,6 +237,7 @@
       var v = pickParam(q, fields[i][1]);
       if (v) t[fields[i][0]] = trunc(v, 120);
     }
+    if (t.fb && placeholderFbclid(t.fb)) delete t.fb;
     if (refHostName) t.h = refHostName.slice(0, 80);
     if (url) t.u = trunc(url, 1000);
     return t;
@@ -347,7 +352,7 @@
     var o = {}, any = false;
     for (var i = 0; i < PRIOR_KEYS.length; i++) {
       var v = lsGet(PRIOR_KEYS[i][1]);
-      if (!v) continue;
+      if (!v || (PRIOR_KEYS[i][0] === 'fb' && placeholderFbclid(v))) continue;
       o[PRIOR_KEYS[i][0]] = trunc(v, 500);
       var at = parseInt(lsGet(PRIOR_KEYS[i][1] + '_ts') || '', 10);
       if (at) o[PRIOR_KEYS[i][0] + '_at'] = at;

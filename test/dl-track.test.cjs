@@ -394,3 +394,29 @@ test('checkout link without Ad-ID is the same click as the ad landing (same ScCi
   assert.strictEqual(p.tp.length, 1);
   assert.strictEqual(p.tp[0].a, 'Snapchat_aad7');
 });
+
+test('the placeholder "fbclid=fbclid" (copied into a Google Ads link) is not a Meta click; every other fbclid still is', async () => {
+  const href = 'https://darlena.com/%D8%B5%D9%8A%D9%81-2026/tag-776177565?fbclid=fbclid&scid=VKvVOxXR7SLY0SznpfUU6VkwkbfjS5btYO0lQg&ttp=9rFktSvRJpIniCn9EsU5Y9p2gap.tt.1' +
+    '&fbc=fb.1.1784640824821.fbclid.AQYAAQIB&fbp=fb.1.1738499339689.974886038599938637.AQYAAQIB&utm_source=google&utm_medium=cpc&gad_source=1&gad_campaignid=21028209101&gclid=CjwKCAjwrbfWBhAeEiwAc2e6Ptx4';
+  const storage = memoryStorage({darlena_fbclid: 'fbclid', darlena_fbclid_ts: '1791835368000'});
+  const {api} = makeEnv({url: href, referrer: 'https://www.google.com/', storage});
+  await wait(400);
+  const pv = evsOf(api)[0];
+  assert.strictEqual(pv.touch.s, 'google');
+  assert.strictEqual(pv.touch.fb, undefined, 'the placeholder is not kept as a Meta click ID');
+  assert.ok(pv.touch.g.startsWith('CjwKCAjwrbfWBhAe'));
+  assert.strictEqual(pv.pc, null, 'a saved placeholder is not sent as a Meta click');
+  // Every other fbclid still counts, short or long.
+  for (const v of ['PAZXh0bgNhZW0BMABkaWQBqzm3NIEw7nNydGMGYXBwX2lk', 'IwAR3x', 'abc']) {
+    const meta = makeEnv({url: 'https://darlena.com/p1?fbclid=' + v});
+    await wait(400);
+    const t = evsOf(meta.api)[0].touch;
+    assert.strictEqual(JSON.stringify([t.s, t.fb]), JSON.stringify(['meta', v]), v);
+  }
+  assert.strictEqual(makeEnv().api.h.readParams('?fbclid=fbclid').ad, false);
+  assert.strictEqual(makeEnv().api.h.readParams('?fbclid=IwAR3x').ad, true);
+  const real = memoryStorage({darlena_fbclid: 'IwAR3xyz', darlena_fbclid_ts: '1791835368000'});
+  const r = makeEnv({url: 'https://darlena.com/', storage: real});
+  await wait(400);
+  assert.strictEqual(evsOf(r.api)[0].pc.fb, 'IwAR3xyz');
+});
