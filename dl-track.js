@@ -1,5 +1,5 @@
 /*!
- * darlena-track v0.2.2
+ * darlena-track v0.2.3
  * First-party ad-click and visitor log for darlena.com, served from jsDelivr
  * (loaded through Salla custom code or GTM; no theme change).
  *
@@ -37,7 +37,7 @@
     if (!w || !d || !w.location || (w.__dlTrack && w.__dlTrack.version)) return;
   } catch (e) { return; }
 
-  var VERSION = '0.2.2';
+  var VERSION = '0.2.3';
   var cfg = w.DL_TRACK_CONFIG || {};
   var ENDPOINT = cfg.endpoint || 'https://darlena.shop/collectTouch';
   var ENDPOINT_V4 = cfg.endpointV4 === null ? null : (cfg.endpointV4 || 'https://darlena.co/collectTouch');
@@ -254,7 +254,12 @@
     ua = ua || '';
     var o = {os: null, osv: null, br: null, brv: null, app: null, appv: null, dev: null};
     var m;
-    if ((m = /\b(iPhone|iPad|iPod)\b.*? OS (\d+[_.]\d+(?:[_.]\d+)?)/.exec(ua))) { o.os = 'iOS'; o.osv = m[2].replace(/_/g, '.'); o.dev = m[1]; }
+    if ((m = /\b(iPhone|iPad|iPod)\b.*? OS (\d+[_.]\d+(?:[_.]\d+)?)/.exec(ua))) {
+      o.os = 'iOS'; o.osv = m[2].replace(/_/g, '.'); o.dev = m[1];
+      // iOS 26+ freezes "OS 18_6 / 18_7" in the user agent; the real version is in Version/26.x.
+      var real = /Version\/(\d+(?:\.\d+){0,2})/.exec(ua);
+      if (/^18\.[67]/.test(o.osv) && real && parseInt(real[1], 10) >= 26) { o.osf = o.osv; o.osv = real[1]; }
+    }
     else if ((m = /Android (\d+(?:\.\d+)*)/.exec(ua))) { o.os = 'Android'; o.osv = m[1]; m = /Android [^;)]*;\s*([^;)]+?)(?:\sBuild|\))/.exec(ua); if (m) o.dev = trunc(m[1], 40); }
     else if ((m = /Mac OS X (\d+[_.]\d+(?:[_.]\d+)?)/.exec(ua))) { o.os = 'macOS'; o.osv = m[1].replace(/_/g, '.'); }
     else if ((m = /Windows NT (\d+\.\d+)/.exec(ua))) { o.os = 'Windows'; o.osv = m[1]; }

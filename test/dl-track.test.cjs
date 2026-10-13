@@ -279,3 +279,15 @@ test('guests are not customers: Salla guest token never sent as a customer, no l
   assert.strictEqual(evs[0].ph, undefined);
 });
 
+test('iPhone on iOS 26+: real version read from Version/, frozen 18.7 kept apart; real iOS 18.7 left alone', () => {
+  const p = makeEnv().api.h.parseUa;
+  const snap = p('Mozilla/5.0 (iPhone; CPU iPhone OS 18_7 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.6.1 Mobile/15E148 Snapchat/14.27.0.54 (like Safari/8624.5.1.10.3)');
+  assert.strictEqual(JSON.stringify([snap.osv, snap.osf, snap.app, snap.appv]), JSON.stringify(['26.6.1', '18.7', 'Snapchat', '14.27.0.54']));
+  const safari = p('Mozilla/5.0 (iPhone; CPU iPhone OS 18_7 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Mobile/15E148 Safari/604.1');
+  assert.strictEqual(JSON.stringify([safari.osv, safari.osf]), JSON.stringify(['26.0', '18.7']));
+  const oldPhone = p('Mozilla/5.0 (iPhone; CPU iPhone OS 18_7 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.7 Mobile/15E148 Safari/604.1');
+  assert.strictEqual(JSON.stringify([oldPhone.osv, oldPhone.osf]), JSON.stringify(['18.7', undefined]));
+  const tiktok = p('Mozilla/5.0 (iPhone; CPU iPhone OS 26_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148 musical_ly_47.0.0 JsSdk/2.0');
+  assert.strictEqual(JSON.stringify([tiktok.osv, tiktok.osf, tiktok.app]), JSON.stringify(['26.6', undefined, 'TikTok']));
+});
+
