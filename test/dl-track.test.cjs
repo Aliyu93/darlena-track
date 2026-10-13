@@ -268,3 +268,14 @@ test('touch list keeps 20 within 90 days', async () => {
   assert.strictEqual(pv.touch.a, 'Snapchat_new');
   assert.strictEqual(pv.tp.length, 20, 'landing carries the path');
 });
+
+test('guests are not customers: Salla guest token never sent as a customer, no login event', async () => {
+  const guest = {id: '0123456789abcdef0123456789abcdef', type: 'guest', mobile: null, email: null};
+  const {api} = makeEnv({url: 'https://darlena.com/?utm_source=snapchat&utm_content=adG', user: guest});
+  await wait(3400);
+  const evs = evsOf(api);
+  assert.strictEqual(types(api), JSON.stringify(['pv']));
+  assert.strictEqual(evs[0].cid, null);
+  assert.strictEqual(evs[0].ph, undefined);
+});
+

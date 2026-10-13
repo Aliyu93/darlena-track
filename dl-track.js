@@ -1,5 +1,5 @@
 /*!
- * darlena-track v0.2.0
+ * darlena-track v0.2.2
  * First-party ad-click and visitor log for darlena.com, served from jsDelivr
  * (loaded through Salla custom code or GTM; no theme change).
  *
@@ -37,7 +37,7 @@
     if (!w || !d || !w.location || (w.__dlTrack && w.__dlTrack.version)) return;
   } catch (e) { return; }
 
-  var VERSION = '0.2.0';
+  var VERSION = '0.2.2';
   var cfg = w.DL_TRACK_CONFIG || {};
   var ENDPOINT = cfg.endpoint || 'https://darlena.shop/collectTouch';
   var ENDPOINT_V4 = cfg.endpointV4 === null ? null : (cfg.endpointV4 || 'https://darlena.co/collectTouch');
@@ -346,10 +346,11 @@
     var m = /\/p(\d{5,})(?:[\/?#]|$)/.exec(path || '');
     return m ? m[1] : null;
   }
+  // A logged-in customer only. Salla also gives guests an id (a 32-character token, type 'guest').
   function sallaUser() {
     try {
       var u = w.salla && w.salla.config && w.salla.config.get && w.salla.config.get('user');
-      if (u && u.id) return u;
+      if (u && u.id && u.type !== 'guest' && /^\d{1,15}$/.test(String(u.id))) return u;
     } catch (e) {}
     return null;
   }
